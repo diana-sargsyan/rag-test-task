@@ -2,8 +2,7 @@
 
 A RAG-style Q&A chatbot that answers natural-language questions about clients, invoices, and line items by generating and executing SQL queries against the data.
 
-**Live Demo**: [https://rag-test-task-tn3n96xdnguypftwx9s7fl.streamlit.app/]
-(https://rag-test-task-tn3n96xdnguypftwx9s7fl.streamlit.app/)
+**Live Demo**: https://rag-test-task-tn3n96xdnguypftwx9s7fl.streamlit.app/
 
 ## Quick Start
 
