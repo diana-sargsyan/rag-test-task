@@ -265,5 +265,5 @@ def generate_results_md(results: list[dict], model: str, accuracy: float):
 
 
 if __name__ == "__main__":
-    model = sys.argv[1] if len(sys.argv) > 1 else "gpt-4o-mini"
+    model = sys.argv[1] if len(sys.argv) > 1 else "gpt-5.1"
     run_evaluation(model)
