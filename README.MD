@@ -1,85 +1,115 @@
-# Task: Build a Chat Over Tabular Data (RAG-style)
+# RAG Chat Over Tabular Data
 
-You are given several Excel files that represent tables from a small business database:
+A RAG-style Q&A chatbot that answers natural-language questions about clients, invoices, and line items by generating and executing SQL queries against the data.
 
-- `Clients.xlsx` – information about clients
-- `Invoices.xlsx` – invoices, dates, amounts, client IDs
-- `InvoiceLineItems.xlsx` – line items for each invoice (service, quantity, rate, tax, etc.)
+## Quick Start
 
-Your task is to build a question-answering chat that can answer natural-language questions about this data by:
+```bash
+# Install dependencies
+pip install -r requirements.txt
 
-1. Understanding the user's question.
-2. Retrieving the relevant rows/records from the tables.
-3. Using an LLM to generate a grounded answer based on those records.
+# Set your OpenAI API key
+cp .env.example .env
+# Edit .env and add your OPENAI_API_KEY
 
-You may assume all data fits in memory (no need for complex scaling).
+# Run the chat UI
+streamlit run app.py
 
-## Examples of Questions the Chat Should Handle
+# Or run the evaluation suite
+python evaluate.py              # uses gpt-5.1 (default)
+python evaluate.py gpt-5.2      # uses gpt-5.2
+```
 
-*(You don't have to hard-code exact answers, but your system should be able to answer questions of this type.)*
+## Architecture
 
-- List all clients with their industries.
-- Which clients are based in the UK?
-- List all invoices issued in March 2024 with their statuses.
-- Which invoices are currently marked as "Overdue"?
-- For each service_name in InvoiceLineItems, how many line items are there?
-- List all invoices for Acme Corp with their invoice IDs, invoice dates, due dates, and statuses.
-- Show all invoices issued to Bright Legal in February 2024, including their status and currency.
-- For invoice I1001, list all line items with service name, quantity, unit price, tax rate, and compute the line total (including tax) for each.
-- For each client, compute the total amount billed in 2024 (including tax) across all their invoices.
-- Which client has the highest total billed amount in 2024, and what is that total?
+```
+User Question
+    ↓
+ChatEngine (conversation memory + query rewriting)
+    ↓
+OpenAI Function-Calling Agent (temperature=0)
+    │
+    ├── get_schema()    → inspect database structure
+    ├── sample_data()   → preview actual data values
+    └── execute_sql()   → run read-only SQL queries
+    │
+    ↓
+DataManager (Excel → in-memory SQLite)
+    ↓
+Natural language answer + SQL + data tables
+```
 
-*(Optional/extra questions)*
-- Across all clients, which three services generated the most revenue in 2024? Show the total revenue per service.
-- Which invoices are overdue as of 2024-12-31? List invoice ID, client name, invoice_date, due_date, and status.
-- Group revenue by client country: for each country, compute the total billed amount in 2024 (including tax).
-- For the service “Contract Review”, list all clients who purchased it and the total amount they paid for that service (including tax).
-- Considering only European clients, what are the top 3 services by total revenue (including tax) in H2 2024 (2024-07-01 to 2024-12-31)?
+### Components
 
-## Requirements
+| File | Purpose |
+|------|---------|
+| `src/data_manager.py` | Loads Excel files into in-memory SQLite, provides schema introspection and safe read-only query execution |
+| `src/prompts.py` | Builds a dynamic system prompt with schema, calculation rules, few-shot examples, and grounding instructions |
+| `src/agent.py` | OpenAI function-calling agent with 3 tools, retry logic on SQL errors, and max iteration guard |
+| `src/chat_engine.py` | Conversation orchestration with memory and contextual query rewriting for follow-up questions |
+| `app.py` | Streamlit chat UI with SQL display, data tables, and model selection |
+| `evaluate.py` | Execution accuracy evaluation — runs both reference and generated SQL and compares actual results |
 
-### Architecture
+### How the RAG Pipeline Works
 
-Implement a RAG-style pipeline where:
+1. **Query Rewriting**: For follow-up questions, a lightweight LLM call rewrites ambiguous references (e.g., "show their invoices" → "show invoices for Acme Corp") using conversation history.
 
-1. The system maps the user's question to some structured retrieval/code over the tables
-2. Retrieves relevant data (rows, aggregates, or both)
-3. Feeds that context to an LLM to generate the final answer.
+2. **Agent Planning**: The OpenAI function-calling agent receives the question + schema-aware system prompt with few-shot examples. It decides which tools to call.
 
-### LLM Usage
+3. **Data Retrieval**: The agent typically calls `execute_sql` with a generated SQL query. If the query fails, the error is fed back and the agent retries with corrected SQL.
 
-- You may use any LLM (open-source or API-based).
-- Unfortunately, we are not providing api key for the test task, but you can use https://console.groq.com/. There is a free plan, and some models are available for API requests.
-- The LLM should **not hallucinate numbers**; all numeric answers must come from actual data you've retrieved.
+4. **Grounded Response**: The agent produces a natural language answer based solely on the query results. The system prompt explicitly forbids fabricating data.
 
-### Interface *(OPTIONAL)*
+### Hallucination Mitigation (Multi-Layer)
 
-A simple interface is enough:
+| Layer | Mechanism |
+|-------|-----------|
+| Tool grounding | Agent MUST use tools to retrieve data — cannot fabricate numbers |
+| Read-only enforcement | SQL queries validated to reject INSERT/UPDATE/DELETE/DROP |
+| Temperature 0 | Deterministic outputs from the LLM |
+| Schema in prompt | Agent knows exact table structure, no column name guessing |
+| Few-shot examples | Teaches correct SQL patterns and calculation formulas |
+| Error feedback loop | Failed SQL queries get retried with error context |
+| Result visibility | UI shows both the SQL and data table so user can verify |
 
-- CLI, Jupyter notebook, or a minimal web UI (e.g. Streamlit / Gradio ).
+### Evaluation Approach
 
-### Time Budget
+The `evaluate.py` script uses **execution accuracy** rather than string matching:
 
-Please spend no more than **5 hours** on this task.
+1. Runs the reference SQL to get expected results
+2. Runs the agent's generated SQL to get actual results
+3. Compares the result sets (handles column ordering, extra columns, float rounding)
+4. Reports exact match, superset match, or mismatch
 
-If you don't fully complete all ideas, that's OK. Focus on building a clear, working core and documenting trade-offs.
+This is more meaningful than ROUGE-L on SQL text, because different SQL queries can produce identical results.
 
-## Deliverables
+## Assumptions and Limitations
 
-1. Create a fork of this repo and push your solution with all required artefacts. Send the link to your repo to our recruiter.
+- **LLM dependency**: Requires an OpenAI API key. The system uses `gpt-5.1` by default, but supports `gpt-5.2`, `gpt-5-mini`, and older models via the UI dropdown.
+- **Data size**: All data is loaded into an in-memory SQLite database. This works well for the provided dataset (~150 rows total) but would need adaptation for larger data.
+- **SQL only**: The system generates SQL to answer questions. Questions that require complex reasoning beyond SQL capabilities (e.g., "predict next quarter's revenue") are out of scope.
+- **European countries**: The system prompt includes a hardcoded list of European countries present in the dataset. A production system would use a reference table.
+- **Currency handling**: The data includes an `fx_rate_to_usd` column but most questions don't require currency conversion. The agent can use it if asked.
+- **Date format**: Dates are stored as TEXT in YYYY-MM-DD format in SQLite. The system prompt instructs the agent to use BETWEEN for date ranges.
 
-2. A short README describing:
-   - How to run the project.
-   - High-level architecture/design.
-   - Assumptions and limitations.
+## Project Structure
 
-3. Test Results Table with two columns in the root directory. Two columns:
-    - Question from the list above
-    - Answer (provided by the pipeline)
-
-## What We Will Look At
-
-- How do you structure the RAG pipeline (retrieval + generation)?
-- How do you mitigate hallucinations / wrong numbers?
-- Code clarity and organization.
-- How do you document assumptions and limitations?
+```
+rag-test-task/
+├── README.MD
+├── requirements.txt
+├── .env.example
+├── data/
+│   ├── Clients.xlsx
+│   ├── Invoices.xlsx
+│   └── InvoiceLineItems.xlsx
+├── src/
+│   ├── __init__.py
+│   ├── data_manager.py
+│   ├── agent.py
+│   ├── prompts.py
+│   └── chat_engine.py
+├── app.py
+├── evaluate.py
+└── Test_Results.md          # Generated by evaluate.py
+```
